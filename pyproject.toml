@@ -1,0 +1,51 @@
+[project]
+name = "tinygpt"
+version = "0.1.0"
+description = "A small decoder-only transformer in PyTorch for studying autoregressive inference: KV caching and speculative decoding."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Paul Davis" }]
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26", "torch>=2.4"]
+keywords = ["transformer", "gpt", "kv-cache", "speculative-decoding", "pytorch"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.scripts]
+tinygpt = "tinygpt.cli:main"
+
+[dependency-groups]
+dev = ["mypy>=1.15", "pytest>=8.3", "ruff>=0.11"]
+
+[build-system]
+requires = ["uv_build>=0.8.13,<0.10"]
+build-backend = "uv_build"
+
+# CPU-only PyTorch. macOS and Windows wheels on PyPI are already CPU builds;
+# on Linux we pull from the PyTorch CPU index to avoid the multi-GB CUDA stack.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "N", "PT", "RUF"]
+
+[tool.mypy]
+files = ["src", "tests"]
+strict = true
+python_version = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
