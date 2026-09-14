@@ -14,6 +14,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from tinygpt.config import ModelConfig
+from tinygpt.kv_cache import KVCache
 
 
 class RMSNorm(nn.Module):
@@ -80,17 +81,34 @@ class CausalSelfAttention(nn.Module):
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
 
-    def forward(self, x: Tensor, rope: RotaryEmbedding, mask: Tensor) -> Tensor:
-        """``x`` is ``(B, T, C)``; ``mask`` is boolean ``(T, T)``, True = may attend."""
+    def forward(
+        self,
+        x: Tensor,
+        rope: RotaryEmbedding,
+        mask: Tensor,
+        cache: KVCache | None = None,
+        layer: int = 0,
+    ) -> Tensor:
+        """Attend from the ``T`` new positions in ``x`` (``(B, T, C)``) to every visible key.
+
+        Without a cache the keys are just the new positions. With a cache, the new
+        positions start at ``cache.pos`` and the keys also include everything cached
+        before them. ``mask`` is boolean ``(T, S)``, True where attending is allowed,
+        with ``S`` the total number of keys.
+        """
         batch, seq_len, channels = x.shape
+        start = cache.pos if cache is not None else 0
         q, k, v = self.qkv(x).split(channels, dim=-1)
         # (B, T, C) -> (B, H, T, D)
         q = q.view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
         k = k.view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
         v = v.view(batch, seq_len, self.n_head, self.head_dim).transpose(1, 2)
 
-        q = rope(q)
-        k = rope(k)
+        # Rotate by absolute position before caching, so cached keys never need touching again.
+        q = rope(q, start)
+        k = rope(k, start)
+        if cache is not None:
+            k, v = cache.update(layer, k, v)
 
         scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         scores = scores.masked_fill(~mask, float("-inf"))
@@ -125,8 +143,15 @@ class Block(nn.Module):
         self.mlp_norm = RMSNorm(config.n_embd, config.norm_eps)
         self.mlp = SwiGLU(config)
 
-    def forward(self, x: Tensor, rope: RotaryEmbedding, mask: Tensor) -> Tensor:
-        x = x + self.attn(self.attn_norm(x), rope, mask)
+    def forward(
+        self,
+        x: Tensor,
+        rope: RotaryEmbedding,
+        mask: Tensor,
+        cache: KVCache | None = None,
+        layer: int = 0,
+    ) -> Tensor:
+        x = x + self.attn(self.attn_norm(x), rope, mask, cache, layer)
         return x + self.mlp(self.mlp_norm(x))  # type: ignore[no-any-return]
 
 
@@ -166,15 +191,36 @@ class GPT(nn.Module):
         """Parameter count, with the tied embedding counted once."""
         return sum(p.numel() for p in self.parameters())
 
-    def forward(self, idx: Tensor) -> Tensor:
-        """Map token ids ``(B, T)`` to next-token logits ``(B, T, vocab_size)``."""
+    def new_cache(self, batch_size: int = 1) -> KVCache:
+        """An empty KV cache sized for this model's full context window."""
+        param = self.tok_emb.weight
+        cfg = self.config
+        return KVCache(
+            cfg.n_layer,
+            batch_size,
+            cfg.n_head,
+            cfg.block_size,
+            cfg.head_dim,
+            device=param.device,
+            dtype=param.dtype,
+        )
+
+    def forward(self, idx: Tensor, cache: KVCache | None = None) -> Tensor:
+        """Map token ids ``(B, T)`` to next-token logits ``(B, T, vocab_size)``.
+
+        With a ``cache``, ``idx`` holds only the tokens the cache hasn't seen yet;
+        they are placed at positions ``cache.pos`` onwards and the cache advances.
+        """
         _, seq_len = idx.shape
-        if seq_len > self.config.block_size:
-            raise ValueError(
-                f"sequence length {seq_len} exceeds block_size {self.config.block_size}"
-            )
-        mask = self.causal_mask[:seq_len, :seq_len]
+        start = cache.pos if cache is not None else 0
+        end = start + seq_len
+        if end > self.config.block_size:
+            raise ValueError(f"sequence length {end} exceeds block_size {self.config.block_size}")
+        # Query i sits at absolute position start + i and may see keys 0..start + i.
+        mask = self.causal_mask[start:end, :end]
         x = self.dropout(self.tok_emb(idx))
-        for block in self.blocks:
-            x = block(x, self.rope, mask)
+        for layer, block in enumerate(self.blocks):
+            x = block(x, self.rope, mask, cache, layer)
+        if cache is not None:
+            cache.advance(seq_len)
         return self.lm_head(self.norm(x))  # type: ignore[no-any-return]
