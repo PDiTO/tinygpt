@@ -13,7 +13,11 @@ VOCAB = 23
 def make_model(seed: int = 0, block_size: int = 48) -> GPT:
     torch.manual_seed(seed)
     cfg = ModelConfig(vocab_size=VOCAB, block_size=block_size, n_layer=3, n_head=4, n_embd=32)
-    return GPT(cfg).eval()
+    model = GPT(cfg).eval()
+    # Spread the logits out so greedy comparisons aren't decided by near-ties.
+    with torch.no_grad():
+        model.tok_emb.weight.normal_(0.0, 0.3)
+    return model
 
 
 @pytest.mark.parametrize("chunks", [[1] * 20, [5, 1, 1, 1, 4, 8], [20], [7, 13]])
