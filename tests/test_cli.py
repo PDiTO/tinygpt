@@ -61,3 +61,15 @@ def test_sample_rejects_unknown_characters(
 ) -> None:
     assert main(["sample", str(checkpoints[0]), "--prompt", "~~~"]) == 2
     assert "not in vocabulary" in capsys.readouterr().err
+
+
+def test_bench_prints_a_table(
+    checkpoints: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    target, draft = checkpoints
+    args = ["bench", "--target", str(target), "--draft", str(draft), "--tokens", "20"]
+    assert main([*args, "--repeats", "1", "-k", "2", "3", "--prompt", "All:"]) == 0
+    out = capsys.readouterr().out
+    for row in ["target, no cache", "target, KV cache", "speculative, k=2", "speculative, k=3"]:
+        assert out.count(row) == 2  # greedy and sampled
+    assert "| greedy | target, KV cache |" in out
