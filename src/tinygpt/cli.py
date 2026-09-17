@@ -10,6 +10,7 @@ from pathlib import Path
 
 import torch
 
+from tinygpt.bench import format_table, run_benchmarks
 from tinygpt.checkpoint import load_checkpoint
 from tinygpt.config import ModelConfig
 from tinygpt.data import load_text
@@ -127,6 +128,46 @@ def cmd_sample(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bench(args: argparse.Namespace) -> int:
+    if args.threads:
+        torch.set_num_threads(args.threads)
+    device = resolve_device(args.device)
+    target = load_checkpoint(args.target, device)
+    draft = load_checkpoint(args.draft, device) if args.draft else None
+    if draft is not None and draft.tokenizer.to_dict() != target.tokenizer.to_dict():
+        print("error: draft and target were trained with different tokenizers", file=sys.stderr)
+        return 2
+    prompt = target.tokenizer.encode(args.prompt)
+    context = len(prompt) + args.tokens
+    if context > target.model.config.block_size:
+        print(
+            f"note: {context} tokens exceeds the context window "
+            f"({target.model.config.block_size}); cached decoding will slide the window",
+            file=sys.stderr,
+        )
+
+    print(
+        f"device {device}, torch threads {torch.get_num_threads()}, "
+        f"target {target.model.num_params():,} params"
+        + (f", draft {draft.model.num_params():,} params" if draft else "")
+        + f", {args.tokens} new tokens, median of {args.repeats}",
+        flush=True,
+    )
+    results = run_benchmarks(
+        target.model,
+        draft.model if draft else None,
+        prompt,
+        args.tokens,
+        repeats=args.repeats,
+        spec_ks=args.spec_k,
+        temperature=args.temperature,
+        device=device,
+        progress=lambda msg: print(f"  running {msg}", file=sys.stderr, flush=True),
+    )
+    print(format_table(results))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tinygpt", description="A small GPT for studying KV caching and speculative decoding."
@@ -159,6 +200,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cpu")
     p.set_defaults(func=cmd_sample)
+
+    p = sub.add_parser("bench", help="measure decoding speed with and without the tricks")
+    p.add_argument("--target", required=True, help="target checkpoint")
+    p.add_argument("--draft", help="draft checkpoint; adds speculative decoding rows")
+    p.add_argument("--tokens", type=int, default=200, help="new tokens per run")
+    p.add_argument("--prompt", default="ROMEO:")
+    p.add_argument("--repeats", type=int, default=3)
+    p.add_argument("-k", "--spec-k", type=int, nargs="+", default=[4])
+    p.add_argument("--temperature", type=float, default=0.8, help="for the sampled rows")
+    p.add_argument("--device", default="cpu")
+    p.add_argument("--threads", type=int, help="torch intra-op threads (default: torch's choice)")
+    p.set_defaults(func=cmd_bench)
 
     return parser
 
