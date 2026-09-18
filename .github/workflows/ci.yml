@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # torch resolves from the PyTorch CPU index on Linux (see [tool.uv.sources]),
+      # so this installs CPU-only wheels. --locked fails if uv.lock is stale.
+      - name: Install
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check
+
+      - name: Format
+        run: uv run ruff format --check
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Test
+        run: uv run pytest
