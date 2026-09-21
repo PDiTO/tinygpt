@@ -132,3 +132,16 @@ def test_kv_cache_bookkeeping() -> None:
         cache.update(0, torch.ones(1, 2, 5, 4), torch.ones(1, 2, 5, 4))
     cache.reset()
     assert len(cache) == 0
+
+
+def test_rollback_past_the_window_start_recovers() -> None:
+    model = make_model(block_size=16)
+    decoder = IncrementalDecoder(model)
+    seq = list(range(20))
+    with torch.no_grad():
+        decoder.logits(seq)  # slides: the cache now starts part-way through seq
+        assert decoder.offset > 5
+        decoder.rollback(5)
+        out = decoder.logits(seq[:6])
+        expected = model(torch.tensor([seq[:6]]))[0, -1:]
+    torch.testing.assert_close(out, expected, rtol=1e-5, atol=1e-5)

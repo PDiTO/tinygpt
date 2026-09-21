@@ -7,7 +7,7 @@ import torch
 from conftest import ModelPair
 
 from tinygpt.config import ModelConfig
-from tinygpt.generate import generate
+from tinygpt.generate import IncrementalDecoder, generate
 from tinygpt.model import GPT
 from tinygpt.sampling import GREEDY, SamplingConfig
 from tinygpt.speculative import (
@@ -59,6 +59,42 @@ def test_speculative_greedy_matches_target_greedy(
     )
     assert spec == reference
     assert stats.emitted == n_new
+
+
+@pytest.mark.parametrize("k", [3, 7])
+def test_drafts_never_push_the_target_out_of_the_first_window(
+    target: GPT,
+    drafts: dict[str, GPT],
+    prompt: list[int],
+    k: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plain decoding keeps the full context until the sequence outgrows the window.
+
+    Speculative decoding asks the target about seq + drafts, which can be longer than seq.
+    If that made the target slide its window early, it would condition on less context
+    than plain decoding and the outputs could differ. Record every slide and check it
+    only happens once the agreed sequence itself no longer fits.
+    """
+    early_slides: list[tuple[int, int]] = []
+
+    class RecordingDecoder(IncrementalDecoder):
+        def logits(self, seq: Sequence[int], n_last: int = 1) -> torch.Tensor:
+            before = self.offset
+            out = super().logits(seq, n_last)
+            agreed = len(seq) - n_last + 1
+            if self.offset != before and agreed <= self.block_size:
+                early_slides.append((agreed, self.offset))
+            return out
+
+    monkeypatch.setattr("tinygpt.speculative.IncrementalDecoder", RecordingDecoder)
+    block = target.config.block_size
+    n_new = block - len(prompt) + 20
+    reference = list(generate(target, prompt, n_new, GREEDY))
+    spec = list(speculative_generate(target, drafts["trained"], prompt, n_new, GREEDY, k=k))
+    assert early_slides == []
+    in_window = block - len(prompt) + 1
+    assert spec[:in_window] == reference[:in_window]
 
 
 def test_speculative_greedy_with_repetition_penalty_matches_target(

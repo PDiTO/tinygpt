@@ -35,12 +35,11 @@ def cmd_train(args: argparse.Namespace) -> int:
         "max_steps": args.steps,
         "batch_size": args.batch_size,
         "learning_rate": args.lr,
+        "min_lr": args.lr / 10 if args.lr is not None else None,
         "eval_interval": args.eval_interval,
         "seed": args.seed,
     }
     train_cfg = replace(preset.train, **{k: v for k, v in overrides.items() if v is not None})
-    if args.lr is not None:
-        train_cfg = replace(train_cfg, min_lr=args.lr / 10)
     model_cfg = ModelConfig(vocab_size=tokenizer.vocab_size, **preset.model)
 
     torch.manual_seed(train_cfg.seed)
@@ -137,7 +136,14 @@ def cmd_bench(args: argparse.Namespace) -> int:
     if draft is not None and draft.tokenizer.to_dict() != target.tokenizer.to_dict():
         print("error: draft and target were trained with different tokenizers", file=sys.stderr)
         return 2
-    prompt = target.tokenizer.encode(args.prompt)
+    try:
+        prompt = target.tokenizer.encode(args.prompt)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if not prompt:
+        print("error: prompt must not be empty", file=sys.stderr)
+        return 2
     context = len(prompt) + args.tokens
     if context > target.model.config.block_size:
         print(
@@ -168,6 +174,13 @@ def cmd_bench(args: argparse.Namespace) -> int:
     return 0
 
 
+def positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value}")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tinygpt", description="A small GPT for studying KV caching and speculative decoding."
@@ -192,11 +205,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("sample", help="generate text from a checkpoint")
     p.add_argument("checkpoint")
     p.add_argument("--prompt", default="\n")
-    p.add_argument("-n", "--max-new-tokens", type=int, default=500)
+    p.add_argument("-n", "--max-new-tokens", type=positive_int, default=500)
     add_sampling_args(p)
     p.add_argument("--no-cache", action="store_true", help="disable the KV cache")
     p.add_argument("--draft", help="draft checkpoint: enables speculative decoding")
-    p.add_argument("-k", "--spec-k", type=int, default=4, help="draft tokens per round")
+    p.add_argument("-k", "--spec-k", type=positive_int, default=4, help="draft tokens per round")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cpu")
     p.set_defaults(func=cmd_sample)
@@ -204,10 +217,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("bench", help="measure decoding speed with and without the tricks")
     p.add_argument("--target", required=True, help="target checkpoint")
     p.add_argument("--draft", help="draft checkpoint; adds speculative decoding rows")
-    p.add_argument("--tokens", type=int, default=200, help="new tokens per run")
+    p.add_argument("--tokens", type=positive_int, default=200, help="new tokens per run")
     p.add_argument("--prompt", default="ROMEO:")
-    p.add_argument("--repeats", type=int, default=3)
-    p.add_argument("-k", "--spec-k", type=int, nargs="+", default=[4])
+    p.add_argument("--repeats", type=positive_int, default=3)
+    p.add_argument("-k", "--spec-k", type=positive_int, nargs="+", default=[4])
     p.add_argument("--temperature", type=float, default=0.8, help="for the sampled rows")
     p.add_argument("--device", default="cpu")
     p.add_argument("--threads", type=int, help="torch intra-op threads (default: torch's choice)")

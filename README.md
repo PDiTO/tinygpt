@@ -224,7 +224,7 @@ tokens while they equal the target's argmax, then take the target's argmax".
 
 ## Tests
 
-The suite is the part I care most about. It's 131 tests, all offline, about 10 seconds on
+The suite is the part I care most about. It's 135 tests, all offline, about 10 seconds on
 CPU. The ones that do the real work:
 
 - **Causal masking.** Perturbing tokens at positions `>= t` leaves logits at positions

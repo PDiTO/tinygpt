@@ -70,8 +70,14 @@ class IncrementalDecoder:
 
     def rollback(self, length: int) -> None:
         """Drop cached positions at or beyond absolute position ``length``."""
-        if self.cache is not None and self.offset + self.cache.pos > length:
-            self.cache.crop(max(0, length - self.offset))
+        if self.cache is None or self.offset + self.cache.pos <= length:
+            return
+        if length >= self.offset:
+            self.cache.crop(length - self.offset)
+        else:
+            # Rolled back past the start of the current window: start a fresh one.
+            self.cache.reset()
+            self.offset = max(0, length - self.block_size // 2)
 
     def _tensor(self, tokens: Sequence[int]) -> Tensor:
         return torch.tensor([list(tokens)], dtype=torch.long, device=self.device)

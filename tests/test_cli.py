@@ -12,7 +12,8 @@ def checkpoints(tmp_path_factory: pytest.TempPathFactory, fixture_path: Path) ->
     target, draft = out / "target.pt", out / "draft.pt"
     common = ["--preset", "tiny", "--data", str(fixture_path), "--device", "cpu"]
     target_args = ["--steps", "30", "--eval-interval", "10", "--out", str(target)]
-    draft_args = ["--steps", "10", "--seed", "1", "--out", str(draft)]
+    # A peak LR below the preset's min_lr must still work: min_lr follows it down.
+    draft_args = ["--steps", "10", "--seed", "1", "--lr", "1e-4", "--out", str(draft)]
     assert main(["train", *common, *target_args]) == 0
     assert main(["train", *common, *draft_args]) == 0
     return target, draft
@@ -73,3 +74,12 @@ def test_bench_prints_a_table(
     for row in ["target, no cache", "target, KV cache", "speculative, k=2", "speculative, k=3"]:
         assert out.count(row) == 2  # greedy and sampled
     assert "| greedy | target, KV cache |" in out
+
+
+def test_bench_rejects_bad_input(
+    checkpoints: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["bench", "--target", str(checkpoints[0]), "--prompt", "~~~"]) == 2
+    assert "not in vocabulary" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        main(["bench", "--target", str(checkpoints[0]), "--tokens", "0"])

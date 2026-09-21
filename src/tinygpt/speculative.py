@@ -16,7 +16,8 @@ output distributed exactly as if the target had sampled on its own:
 
 Greedy mode is the same rule with one-hot distributions, which reduces to
 "accept while the draft's argmax equals the target's argmax". It produces the
-same tokens as greedy decoding with the target alone.
+same tokens as greedy decoding with the target alone, for as long as the sequence
+fits in the context window.
 """
 
 from __future__ import annotations
@@ -131,6 +132,7 @@ def speculative_generate(
     target.eval()
     draft.eval()
     stats = stats if stats is not None else SpeculativeStats()
+    block_size = min(target.config.block_size, draft.config.block_size)
     target_dec = IncrementalDecoder(target)
     draft_dec = IncrementalDecoder(draft)
     seq = list(prompt)
@@ -139,6 +141,11 @@ def speculative_generate(
     while produced < max_new_tokens:
         # A round emits at most n_draft + 1 tokens, so don't draft past the end.
         n_draft = min(k, max_new_tokens - produced - 1)
+        if len(seq) <= block_size:
+            # While the sequence still fits in the first window, don't let the drafts push
+            # the target into sliding early. Plain decoding sees the full context here, and
+            # the greedy equivalence depends on the target seeing the same.
+            n_draft = min(n_draft, block_size - len(seq))
         with torch.inference_mode():
             new_tokens, n_accepted = _speculative_round(
                 target_dec, draft_dec, seq, n_draft, sampling, generator
