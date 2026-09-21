@@ -144,18 +144,21 @@ The "vs KV cache" column is relative to the target with the cache, in the same m
 
 | mode | method | tokens/s | vs KV cache | acceptance | tokens/target pass |
 |---|---|---:|---:|---:|---:|
-| greedy | target, no cache | 306 | 0.30x |  |  |
-| greedy | target, KV cache | 1,031 | 1.00x |  |  |
-| greedy | draft, KV cache | 5,741 | 5.57x |  |  |
-| greedy | speculative, k=2 | 1,316 | 1.28x | 59.0% | 2.17 |
-| greedy | speculative, k=4 | 1,331 | 1.29x | 44.3% | 2.74 |
-| greedy | speculative, k=8 | 1,251 | 1.21x | 28.1% | 3.17 |
-| sampled T=0.8 | target, no cache | 306 | 0.29x |  |  |
-| sampled T=0.8 | target, KV cache | 1,038 | 1.00x |  |  |
-| sampled T=0.8 | draft, KV cache | 5,514 | 5.31x |  |  |
-| sampled T=0.8 | speculative, k=2 | 1,341 | 1.29x | 66.7% | 2.32 |
-| sampled T=0.8 | speculative, k=4 | 1,585 | 1.53x | 57.0% | 3.25 |
-| sampled T=0.8 | speculative, k=8 | 1,293 | 1.25x | 34.4% | 3.72 |
+| greedy | target, no cache | 317 | 0.29x |  |  |
+| greedy | target, KV cache | 1,076 | 1.00x |  |  |
+| greedy | draft, KV cache | 5,782 | 5.37x |  |  |
+| greedy | speculative, k=2 | 1,327 | 1.23x | 59.0% | 2.17 |
+| greedy | speculative, k=4 | 1,394 | 1.30x | 44.3% | 2.74 |
+| greedy | speculative, k=8 | 1,231 | 1.14x | 28.1% | 3.17 |
+| sampled T=0.8 | target, no cache | 310 | 0.28x |  |  |
+| sampled T=0.8 | target, KV cache | 1,094 | 1.00x |  |  |
+| sampled T=0.8 | draft, KV cache | 5,647 | 5.16x |  |  |
+| sampled T=0.8 | speculative, k=2 | 1,351 | 1.23x | 66.7% | 2.32 |
+| sampled T=0.8 | speculative, k=4 | 1,715 | 1.57x | 57.0% | 3.25 |
+| sampled T=0.8 | speculative, k=8 | 1,411 | 1.29x | 34.4% | 3.72 |
+
+I ran the benchmark twice. Individual throughput numbers moved by a few percent between
+runs. The acceptance rates are deterministic for a given seed and came out identical.
 
 What I took away from it:
 
@@ -164,16 +167,16 @@ What I took away from it:
   total work grows quadratically with output length. With it, each step processes one token
   and only attention still looks at the whole history.
 - **Speculative decoding helps, but less than I expected from the draft's speed.** The draft
-  has 13x fewer parameters yet is only 5.6x faster, because at batch size 1 a forward pass
+  has 13x fewer parameters yet is only about 5.4x faster, because at batch size 1 a forward pass
   on a model this small is mostly fixed per-call overhead rather than arithmetic. I timed
   the forward passes on their own at context position 100: one token through the target
   takes 0.87 ms, five tokens take 1.25 ms, one token through the draft takes 0.15 ms. A
   greedy round with k=4 is then four draft steps plus one five-token verify, about 1.87 ms,
-  and yields 2.74 tokens on average. That's 0.68 ms per token against 0.87 ms, which is the
-  1.29x in the table.
+  and yields 2.74 tokens on average. That's 0.68 ms per token against 0.87 ms, or 1.28x, close
+  to the 1.30x in the table.
 - **Bigger k isn't better.** Acceptance per drafted token falls as k grows, since one miss
   throws away everything after it, while the draft cost keeps rising linearly. k=4 came out
-  best in both modes, though only narrowly over k=2 for greedy.
+  best in both modes.
 - **Sampling accepted more than greedy did.** At T=0.8 the target's distribution is
   flatter, so `min(1, p/q)` is less often tiny. With greedy decoding a draft token is either
   exactly the target's argmax or it's rejected outright.
