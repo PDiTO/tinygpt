@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="tinygpt logo" width="380">
+</p>
+
 # tinygpt
 
 A small decoder-only transformer written from scratch in PyTorch. I built it to poke at the
