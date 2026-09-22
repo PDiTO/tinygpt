@@ -301,7 +301,10 @@ def test_speculative_sampling_with_real_models_follows_the_target(trained_pair: 
     with torch.no_grad():
         p = torch.softmax(target(torch.tensor([prompt]))[0, -1], dim=-1)
         q = torch.softmax(draft(torch.tensor([prompt]))[0, -1], dim=-1)
-    assert 0.5 * (p - q).abs().sum() > 0.2  # the draft genuinely disagrees
+    # The draft must disagree enough for the chi-square check against q below to mean
+    # something. The exact gap depends on platform float differences during training
+    # (about 0.14 on Linux CI, higher on macOS), so keep the floor loose.
+    assert 0.5 * (p - q).abs().sum() > 0.1
 
     gen = torch.Generator().manual_seed(0)
     cfg = SamplingConfig(temperature=1.0)
