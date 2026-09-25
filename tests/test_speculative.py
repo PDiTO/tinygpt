@@ -296,24 +296,35 @@ def test_distribution_check_catches_a_subtly_wrong_rule() -> None:
 def test_speculative_sampling_with_real_models_follows_the_target(trained_pair: ModelPair) -> None:
     """End to end through speculative_generate: the first sampled token follows the
     target's next-token distribution, not the draft's."""
-    target, draft, tok = trained_pair.target, trained_pair.draft, trained_pair.tokenizer
+    target, tok = trained_pair.target, trained_pair.tokenizer
+    draft = copy.deepcopy(trained_pair.draft)
     prompt = tok.encode("You are ")
     with torch.no_grad():
         p = torch.softmax(target(torch.tensor([prompt]))[0, -1], dim=-1)
+        # Give the draft a controlled output head: half uniform, half on the target's
+        # least likely token. This guarantees a large gap regardless of training
+        # differences, while retaining support for every token and the real GPT/cache path.
+        draft_probs = torch.full_like(p, 0.5 / tok.vocab_size)
+        draft_probs[p.argmin()] += 0.5
+        # Untie the output weights so the copied draft's input embeddings stay intact.
+        draft.lm_head.weight = torch.nn.Parameter(torch.zeros_like(draft.lm_head.weight))
+        draft.lm_head.bias = torch.nn.Parameter(draft_probs.log())
         q = torch.softmax(draft(torch.tensor([prompt]))[0, -1], dim=-1)
-    # The draft must disagree enough for the chi-square check against q below to mean
-    # something. The exact gap depends on platform float differences during training
-    # (about 0.14 on Linux CI, higher on macOS), so keep the floor loose.
-    assert 0.5 * (p - q).abs().sum() > 0.1
+    # p.min() <= 1 / vocab_size, so the gap is at least 0.5 - 0.5 / vocab_size.
+    assert 0.5 * (p - q).abs().sum() > 0.4
 
     gen = torch.Generator().manual_seed(0)
     cfg = SamplingConfig(temperature=1.0)
     n = 4000
     counts = torch.zeros(tok.vocab_size)
+    stats = SpeculativeStats()
     for _ in range(n):
-        stream = speculative_generate(target, draft, prompt, 2, cfg, k=1, generator=gen)
+        stream = speculative_generate(
+            target, draft, prompt, 2, cfg, k=1, generator=gen, stats=stats
+        )
         counts[next(stream)] += 1
 
+    assert 0 < stats.accepted < stats.proposed
     chi2, df = pooled_chi_square(counts, p * n)
     assert chi2 < chi_square_critical(df), f"chi2={chi2:.1f} df={df}"
     chi2_vs_draft, df_draft = pooled_chi_square(counts, q * n)
