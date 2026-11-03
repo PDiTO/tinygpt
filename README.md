@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" alt="tinygpt logo" width="380">
+  <img src="docs/logo.png" alt="tinygpt logo" width="220">
 </p>
 
 # tinygpt
